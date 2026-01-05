@@ -74,7 +74,8 @@ with st.sidebar:
                 try:
                     payload = {
                         "session_id": st.session_state.session_id,
-                        "title": report_title
+                        "title": report_title,
+                        "messages": st.session_state.messages # Send current history to backend
                     }
                     resp = requests.post(f"{API_BASE_URL}/pdf", json=payload)
                     if resp.status_code == 200:

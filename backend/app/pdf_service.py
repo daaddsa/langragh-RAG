@@ -11,10 +11,11 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # Try to register a Chinese font. 
-# For MVP, we assume a font file exists or we use a default fallback.
-# In a real student project, they should put 'SimSun.ttf' in the root or assets folder.
-FONT_PATH = os.path.join(os.path.dirname(__file__), "../../assets/SimSun.ttf")
-FONT_NAME = "SimSun"
+# We use SimSun (simsun.ttc) which is standard on Windows.
+# Note: It's a TTC file, so we need to specify subfontIndex=0.
+# Path correction: backend/app/../assets/simsun.ttc
+FONT_PATH_SIMSUN = os.path.join(os.path.dirname(__file__), "../assets/simsun.ttc")
+FONT_NAME = "ChineseFont"
 
 # Global flag to track font registration
 _font_registered = False
@@ -25,14 +26,18 @@ def register_font():
         return True
         
     try:
-        if os.path.exists(FONT_PATH):
-            pdfmetrics.registerFont(TTFont(FONT_NAME, FONT_PATH))
+        # Check if simsun.ttc exists
+        if os.path.exists(FONT_PATH_SIMSUN):
+            # Register TTC font (subfontIndex=0 usually is SimSun)
+            pdfmetrics.registerFont(TTFont(FONT_NAME, FONT_PATH_SIMSUN, subfontIndex=0))
+            print(f"DEBUG: Successfully registered font {FONT_NAME} from {FONT_PATH_SIMSUN}")
             _font_registered = True
             return True
         else:
-            # Fallback for dev environment without the font file
+            print(f"DEBUG: Font file not found at {FONT_PATH_SIMSUN}")
             return False
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG: Failed to register font: {e}")
         return False
 
 def generate_pdf(messages: List[dict], title: str = "研报") -> bytes:

@@ -4,7 +4,13 @@ from fastapi.responses import StreamingResponse, Response
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from backend.app.schema import ChatRequest, PDFRequest
+from pydantic import BaseModel
+from backend.app.schema import ChatRequest
+
+class PDFRequest(BaseModel):
+    session_id: str
+    title: str
+    messages: list[dict] = [] # Allow frontend to pass messages directly
 from backend.app.graph import get_graph_engine
 from backend.app.pdf_service import generate_pdf
 
@@ -122,47 +128,42 @@ async def pdf_endpoint(request: PDFRequest):
     """
     try:
         global checkpointer
-        config = {"configurable": {"thread_id": request.session_id}}
-        # Retrieve state
-        checkpoint = checkpointer.get(config)
         
-        messages = []
-        if checkpoint:
-             # Checkpoint structure: {'channel_values': {'messages': [...]}, ...}
-             # We need to adapt based on LangGraph version.
-             # For 0.0.10+, it usually returns a Checkpoint object.
-             # Let's inspect the messages.
-             # Assuming standard LangGraph checkpoint structure.
-             if isinstance(checkpoint, dict) and "channel_values" in checkpoint:
-                  messages = checkpoint["channel_values"].get("messages", [])
-             elif hasattr(checkpoint, "channel_values"):
-                  messages = checkpoint.channel_values.get("messages", [])
-        
-        # If checkpoint is empty (e.g. using MemorySaver and server restarted), 
-        # fallback to empty list or handle gracefully.
-        # But wait, PDF generation usually happens immediately after chat.
-        # If using MemorySaver, state is preserved as long as process is alive.
-        
-        if not messages:
-             # Fallback: maybe client can send history? 
-             # For now, let's just return a PDF saying "No History Found"
-             pass
-             
-        # Convert LangChain messages to simple dicts for PDF service
+        # Priority 1: Use messages provided by frontend
         history = []
-        for msg in messages:
-            role = "unknown"
-            if msg.type == "human":
-                role = "user"
-            elif msg.type == "ai":
-                role = "assistant"
-            elif msg.type == "tool":
-                role = "tool"
+        if request.messages:
+             print(f"DEBUG: Using {len(request.messages)} messages provided by frontend.")
+             history = request.messages
+        else:
+            # Priority 2: Fallback to checkpoint
+            config = {"configurable": {"thread_id": request.session_id}}
+            checkpoint = checkpointer.get(config)
             
-            history.append({
-                "role": role,
-                "content": msg.content
-            })
+            messages = []
+            if checkpoint:
+                 if isinstance(checkpoint, dict) and "channel_values" in checkpoint:
+                      messages = checkpoint["channel_values"].get("messages", [])
+                 elif hasattr(checkpoint, "channel_values"):
+                      messages = checkpoint.channel_values.get("messages", [])
+            
+            if not messages:
+                 print("DEBUG: No messages found in checkpoint.")
+            else:
+                 print(f"DEBUG: Found {len(messages)} messages in checkpoint.")
+                 
+            for msg in messages:
+                role = "unknown"
+                if msg.type == "human":
+                    role = "user"
+                elif msg.type == "ai":
+                    role = "assistant"
+                elif msg.type == "tool":
+                    role = "tool"
+                
+                history.append({
+                    "role": role,
+                    "content": msg.content
+                })
         
         pdf_bytes = generate_pdf(history, title=request.title)
         
