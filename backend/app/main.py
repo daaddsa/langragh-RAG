@@ -1,6 +1,6 @@
 import os
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import Response
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -53,68 +53,12 @@ async def chat_endpoint(request: ChatRequest):
         # Prepare Input
         inputs = {"messages": [HumanMessage(content=request.message)]}
         
-        # Streaming Logic
-        async def event_generator():
-            try:
-                # Initial connection established message
-                yield "🔍 正在思考..." 
-                
-                async for event in graph.astream_events(inputs, config=config, version="v1"):
-                    kind = event["event"]
-                    
-                    # Log event for debugging
-                    print(f"DEBUG: {kind} - {event.get('name')}")
-                    
-                    # Feedback for Tool Execution (Search)
-                    if kind == "on_tool_start":
-                        yield "\n\n🌐 正在联网搜索相关信息...\n\n"
-                    elif kind == "on_tool_end":
-                        yield "✅ 搜索完成，正在整理回答...\n\n"
-                        
-                    # Stream LLM tokens for "chatbot" node
-                    # Note: Different providers might emit different event types.
-                    # Standard is 'on_chat_model_stream', but let's be robust.
-                    if kind == "on_chat_model_stream" or kind == "on_llm_stream":
-                        chunk = event["data"]["chunk"]
-                        # Chunk can be AIMessageChunk or string or dict
-                        content = ""
-                        if hasattr(chunk, "content"):
-                            content = chunk.content
-                        elif isinstance(chunk, dict):
-                            content = chunk.get("content", "")
-                        elif isinstance(chunk, str):
-                            content = chunk
-                        
-                        if content:
-                            yield content
-                    
-                    # Fallback: Capture final output if stream didn't work
-                    if kind == "on_chain_end" and event.get("name") == "chatbot":
-                        output = event["data"].get("output")
-                        # Output might be {'messages': [AIMessage(...)]}
-                        if output and isinstance(output, dict) and "messages" in output:
-                            msg = output["messages"][-1]
-                            if hasattr(msg, "content") and msg.content:
-                                # Only yield if we haven't streamed anything yet? 
-                                # Or just yield it. Frontend should handle duplicates or we can check.
-                                # For now, let's just yield it as a fallback.
-                                # But be careful not to duplicate if streaming worked.
-                                # Let's assume if streaming worked, we saw 'on_chat_model_stream'.
-                                # We can't easily track state here without a class.
-                                # A simple hack: yield it. If frontend sees duplicate, it's better than nothing.
-                                yield msg.content
-                            # yield "" # Force flush? Usually not needed in Python async generator but helps in some WSGI servers
-            except Exception as e:
-                # Catch errors during streaming (like OpenAI 429) and yield them to frontend
-                error_msg = str(e)
-                if "insufficient_quota" in error_msg:
-                    yield "\n\n**错误提示**: OpenAI API Key 额度已用尽 (Insufficient Quota)。请检查您的扣费情况或更换 Key。"
-                elif "Rate limit" in error_msg:
-                    yield "\n\n**错误提示**: 触发了 OpenAI API 速率限制，请稍后再试。"
-                else:
-                    yield f"\n\n**系统错误**: {error_msg}"
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream") # Changed from text/plain to text/event-stream for better buffering behavior
+        # Non-Streaming Logic
+        result = await graph.ainvoke(inputs, config=config)
+        messages = result["messages"]
+        last_message = messages[-1]
+        
+        return {"content": last_message.content}
             
     except Exception as e:
         import traceback
@@ -127,43 +71,22 @@ async def pdf_endpoint(request: PDFRequest):
     Generates PDF from session history.
     """
     try:
-        global checkpointer
+        # Simplified PDF generation logic: Direct use of provided messages
+        # Removed complex Checkpoint fallback logic as frontend now reliably provides full context
         
-        # Priority 1: Use messages provided by frontend
         history = []
         if request.messages:
-             print(f"DEBUG: Using {len(request.messages)} messages provided by frontend.")
-             history = request.messages
-        else:
-            # Priority 2: Fallback to checkpoint
-            config = {"configurable": {"thread_id": request.session_id}}
-            checkpoint = checkpointer.get(config)
-            
-            messages = []
-            if checkpoint:
-                 if isinstance(checkpoint, dict) and "channel_values" in checkpoint:
-                      messages = checkpoint["channel_values"].get("messages", [])
-                 elif hasattr(checkpoint, "channel_values"):
-                      messages = checkpoint.channel_values.get("messages", [])
-            
-            if not messages:
-                 print("DEBUG: No messages found in checkpoint.")
-            else:
-                 print(f"DEBUG: Found {len(messages)} messages in checkpoint.")
-                 
-            for msg in messages:
-                role = "unknown"
-                if msg.type == "human":
-                    role = "user"
-                elif msg.type == "ai":
-                    role = "assistant"
-                elif msg.type == "tool":
-                    role = "tool"
-                
+             # print(f"DEBUG: Using {len(request.messages)} messages provided by frontend.")
+             for msg in request.messages:
+                role = msg.get("role", "unknown")
+                # Map frontend roles to standard roles if needed, though they usually match
                 history.append({
                     "role": role,
-                    "content": msg.content
+                    "content": msg.get("content", "")
                 })
+        else:
+             # Minimal fallback if needed, or just return empty PDF
+             pass
         
         pdf_bytes = generate_pdf(history, title=request.title)
         
